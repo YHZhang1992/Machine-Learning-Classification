@@ -1,0 +1,104 @@
+acc_cross_validation = c()
+obb_cross_validation = c()
+
+set.seed(1992)
+train_y = gsub("NEPD",0,train_y)
+train_y = gsub("EPD",1,train_y)
+folds = folds(as.numeric(as.character(train_y)),nfolds = 10,stratified = TRUE,seed = 1992)
+
+ntree = c(200,300,400,500,600) 
+mtry = c(4,6,8,10)
+
+for (i in 1:10){
+  train_x_input = train_x[!folds == i,]
+  test_x_input = train_x[folds == i,]
+  train_y_input = train_y[!folds == i]
+  test_y_input = train_y[folds == i]
+  # top 65 features selected 
+  p = c()
+  for (k in 1:ncol(train_x_input)){
+    tmp = train_x_input[,k]
+    model = lm(tmp ~ train_y_input)
+    p = c(p,summary(model)$coefficients[2,4])
+  }
+  names(p) = colnames(train_x_input)
+  p = sort(p)[1:ceiling(sqrt(ncol(train_x_input)))]
+  feature = names(p)
+  
+  for (j in ntree){
+    for(m in mtry){
+      model = randomForest::randomForest(x = train_x[,feature],y = as.factor(train_y), ntree = j, mtry = m)
+      name = paste0("round = ",i,";ntree = ",j,";mtry = ",m)
+      print(name)
+      predict_result = predict(model,newdata = test_x_input)
+      confusion <- confusionMatrix(as.factor(predict_result), as.factor(test_y_input))
+      obb = min(model$err.rate[,1])
+      acc_cross_validation = c(acc_cross_validation,confusion$overall[1])
+      names(acc_cross_validation)[length(acc_cross_validation)] = name
+      obb_cross_validation = c(obb_cross_validation,obb)
+      names(obb_cross_validation)[length(obb_cross_validation)] = name
+    }
+  }
+}  
+
+average_acc = c()
+average_obb = c()
+  
+for (i in ntree){
+  for(j in mtry){
+    name_input = paste0("ntree = ",i,";mtry = ",j)
+    obb_select = mean(obb_cross_validation[grep(name_input,names(obb_cross_validation))])
+    acc_select = mean(acc_cross_validation[grep(name_input,names(acc_cross_validation))])
+    average_acc = c(average_acc,acc_select)
+    names(average_acc)[length(average_acc)] = name_input
+    average_obb = c(average_obb,obb_select)
+    names(average_obb)[length(average_obb)] = name_input
+  }
+}
+
+
+set.seed(1999)
+
+p = c()
+for (k in 1:ncol(train_x)){
+  tmp = train_x[,k]
+  model = lm(tmp ~ train_y)
+  p = c(p,summary(model)$coefficients[2,4])
+}
+names(p) = colnames(train_x)
+p = sort(p)[1:ceiling(sqrt(ncol(train_x)))]
+feature = names(p)
+
+
+final_model = randomForest::randomForest(x = train_x,y = as.factor(train_y), ntree = 600, mtry = 8)
+
+predict_result_prob = predict(final_model,newdata = na.omit(test_x[,feature]),type = "prob")[,"1"]
+predict_result_class = predict(final_model,newdata = na.omit(test_x[,feature]),type = "response")
+
+predict_result_prob_train = predict(final_model,newdata = na.omit(train_x[,feature]),type = "prob")[,"1"]
+predict_result_class_train = predict(final_model,newdata = na.omit(train_x[,feature]),type = "response")
+
+# ACC: 60.33
+# AUC: 0.65
+
+test_y = gsub("NEPD","0",test_y)
+test_y = gsub("EPD","1",test_y)
+
+confusion <- confusionMatrix(predict_result_class, as.factor(test_y[rownames(na.omit(test_x))]))
+
+roc_curve <- roc(test_y[rownames(na.omit(test_x))], predict_result_prob, levels = c("0", "1"))
+plot(roc_curve, col = "blue", main = "ROC Curve for Random Forest Model (SPIROMICS Validation)")
+
+
+plot(roc_curve, main = "ROC Curve for Random Forest Model (Test)", col = "blue")
+auc_value <- auc(roc_curve)
+text(0.5, 0.5, paste("AUC =", round(auc_value, 2)), pos = 4)
+
+train_y = gsub("0","NEPD",train_y)
+train_y = gsub("1","EPD",train_y)
+roc_curve_train <- roc(train_y, predict_result_prob_train, levels = c("NEPD", "EPD"))
+plot(roc_curve_train, col = "blue", main = "ROC Curve for Random Forest Model (COPDGene Train)")
+
+
+rf_model = final_model
+importance_scores <- importance(rf_model)
