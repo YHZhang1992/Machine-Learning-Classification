@@ -1,0 +1,43 @@
+name: smoke-test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m py_compile python/*.py
+      - name: Small end-to-end smoke test
+        run: |
+          python - <<'PY'
+          import numpy as np, pandas as pd
+          rng = np.random.default_rng(42)
+          n, p = 80, 12
+          X = rng.normal(size=(n, p))
+          score = 1.5 * X[:, 0] - X[:, 3]
+          y = np.where(score + rng.normal(size=n) > 0, "Case", "Control")
+          df = pd.DataFrame(X, columns=[f"Gene{i+1}" for i in range(p)])
+          df["label"] = y
+          df.to_csv("smoke.csv", index=False)
+          PY
+          python python/q1_optimize_features.py --data smoke.csv --label label --positive Case --feature-counts 5,12 --outer-folds 2 --inner-folds 2 --output results/q1
+          python python/q3_compare_models.py --data smoke.csv --label label --positive Case --feature-counts 5,12 --models ElasticNet,NaiveBayes --outer-folds 2 --inner-folds 2 --output results/q3
+          python python/q2_train_frozen_model.py --data smoke.csv --label label --positive Case --recommended-model-file results/q3/recommended_model.txt --feature-counts 5,12 --inner-folds 2 --output artifacts/model
+          python python/apply_frozen_model.py --model artifacts/model/frozen_model.joblib --data smoke.csv --output transfer_predictions.csv
+          test -s transfer_predictions.csv
+
+  r-parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+      - name: Parse R scripts
+        run: |
+          Rscript -e 'for (f in list.files("R", pattern="\\.R$", full.names=TRUE)) { message("Parsing ", f); parse(file=f) }'
